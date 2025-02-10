@@ -43,19 +43,11 @@ def BH_differential_crosssection(Z, cosT_, k, E_, E2, p_, p2):
     T6 = - d2T / (p2 * T) * (T6_1 - T6_2 - T6_3)
     T7 = - 2 * y2 / D_
 
-    return prefactor * (T1 + T2 + T3 + T4 + T5 + T6 + T7)
+    return np.nan_to_num(prefactor * (T1 + T2 + T3 + T4 + T5 + T6 + T7), nan=0.)
 
 
 @njit
-def inner_integral(Z, lf_nuc, Ee, k, Emin_):
-    # ==================== INNER INTEGRAL ====================
-    # integral 3: over all electron energies (in nucleus rest frame - NRF)
-
-    # electron
-    Emax_   = k - 1
-    E_      = np.logspace(np.log10(Emin_), np.log10(Emax_), 20)
-    dE_     = np.ediff1d(E_)
-    E_      = (E_[1:] + E_[:-1]) / 2
+def inner_integrand(E_, Ee, lf_nuc, k, Z):
     p_      = np.sqrt(E_**2 - 1)  # momentum in NRF
 
     cosT_ = (E_ - Ee / lf_nuc) / p_  # angle between momentum of incident photon and produced electron in NRF
@@ -66,9 +58,37 @@ def inner_integral(Z, lf_nuc, Ee, k, Emin_):
 
     W = BH_differential_crosssection(Z, cosT_, k, E_, E2, p_, p2)  # [m^2 / eV]
 
-    # units: W [m^2 / eV] / (1 / c) [m / s] -> inner [m^3 / s / eV]
-    inner = np.nan_to_num((dE_ / (p_ / c) * W)[(E_ >= Emin_) * (E_ <= Emax_)], nan=0).sum()
+    return W / (p_ / c)
 
+
+@njit
+def inner_midpoint(E_, dE_, Ee, lf_nuc, k, Z):
+    return (dE_ * inner_integrand((E_[1:] + E_[:-1]) / 2, Ee, lf_nuc, k, Z)).sum()
+
+
+@njit
+def inner_simpson(E_, dE_, Ee, lf_nuc, k, Z):
+    # left
+    left = inner_integrand(E_[:-1], Ee, lf_nuc, k, Z)
+    # middle
+    middle = inner_integrand((E_[1:] + E_[:-1]) / 2, Ee, lf_nuc, k, Z)
+    # right
+    right = inner_integrand(E_[1:], Ee, lf_nuc, k, Z)
+
+    return (dE_ / 6 * (left + 4 * middle + right)).sum()
+
+
+@njit
+def inner_integral(Z, lf_nuc, Ee, k, Emin_):
+    # ==================== INNER INTEGRAL ====================
+    # integral 3: over all electron energies (in nucleus rest frame - NRF)
+    Emax_   = k - 1
+    E_      = np.logspace(np.log10(Emin_), np.log10(Emax_), 20)
+    dE_     = np.ediff1d(E_)
+
+    inner = inner_midpoint(E_, dE_, Ee, lf_nuc, k, Z)
+
+    # units: W [m^2 / eV] / (1 / c) [m / s] -> inner [m^3 / s / eV]
     return inner
 
 
@@ -76,7 +96,6 @@ def inner_integral(Z, lf_nuc, Ee, k, Emin_):
 def middle_integral(Z, lf_nuc, Ee, eps, k_min, Emin_):
     # ==================== MIDDLE INTEGRAL ====================
     # integral 2: over all scattering angles (nucleus - photon); (-> all k)
-
     k_max   = 2 * lf_nuc * eps
     k_arr   = np.logspace(np.log10(k_min), np.log10(k_max), 20 + 1)
     dk      = np.ediff1d(k_arr)
@@ -92,7 +111,7 @@ def middle_integral(Z, lf_nuc, Ee, eps, k_min, Emin_):
 
 
 @njit
-def outer_integral(Z, lf_nuc, Ee, eps_arr, eps_max, deps, f_pho):
+def outer_integral(Z, lf_nuc, Ee, eps_max, eps_arr, deps, f_pho):
     # INTEGRATION LOWER LIMITS -----
     # middle
     k_min = (lf_nuc + Ee)**2 / (2 * lf_nuc * Ee)
@@ -113,21 +132,14 @@ def outer_integral(Z, lf_nuc, Ee, eps_arr, eps_max, deps, f_pho):
     return outer
 
 
-@njit
-def loop_electron_energies(A, Z, Ee_arr, E_nuc, eps_arr, eps_max, deps, f_pho):
-    # nucleon Lorentz factor
-    lf_nuc = E_nuc  / (MPC2 * A) - 1
-
+def loop_electron_energies(A, Z, Ee_arr, lf_nuc, eps_max, eps_arr, deps, f_pho):
     dNdEe = np.zeros(len(Ee_arr))  # [1 / eV / s]
 
     for m, Ee in enumerate(Ee_arr):
-        # sys.stdout.write('\r\tEe: %.2f | %.1E eV' % ((m + 1) / len(Ee_arr), Ee * MEC2))
-        # sys.stdout.flush()
+        outer = outer_integral(Z, lf_nuc, Ee, eps_max, eps_arr, deps, f_pho)  # [1 / eV / s]
+        dNdEe[m] = (1 / (2 * lf_nuc**3) * outer)
 
-        outer = outer_integral(Z, lf_nuc, Ee, eps_arr, eps_max, deps, f_pho)  # [1 / eV / s]
-        dNdEe[m] = (1 / (2 * lf_nuc**3) * outer)  # [1 / eV / s]
-
-    return dNdEe
+    return dNdEe  # [1 / eV / s]
 
 
 def main():
@@ -162,7 +174,10 @@ def main():
 
     for ni, E_nuc in enumerate(E_nuc_arr):
         print('Ep: %.2f | %.1E eV' % ((ni + 1) / N_Ep, E_nuc))
-        dNdEe = loop_electron_energies(A, Z, Ee_arr, E_nuc, eps_arr, eps_max, deps, f_pho)
+        # nucleon Lorentz factor
+        lf_nuc = E_nuc  / (MPC2 * A) - 1
+
+        dNdEe = loop_electron_energies(A, Z, Ee_arr, lf_nuc, eps_max, eps_arr, deps, f_pho)
 
         data_write[2][ni * N_Ee:(ni + 1) * N_Ee] = dNdEe
 

@@ -1,4 +1,3 @@
-#include <stdio.h>
 #include <math.h>
 
 // =============================
@@ -8,19 +7,11 @@
 double c = 299792458;
 // electron mass [eV]
 double MEC2 = 510998.95;
-// proton mass [eV]
-double MPC2 = 938272088.16;
-// Planck constant [eV / Hz]
-double h = 4.135667696923859e-15;
 // fine-structure constant
 double alpha = 7.2973525693e-3;
 // classical electron radius [m]
 double re = 2.8179403262e-15;
 // # =============================
-
-int square(int i) {
-    return i * i;
-}
 
 
 double differential_crosssection(int Z, double cosT_, double k, double E_, double E2, double p_, double p2) {
@@ -68,17 +59,22 @@ double inner_integrand(double E_, double Ee, double lf_nuc, double k, double Z) 
 }
 
 
-double inner_integral(int Z, double lf_nuc, double Ee, double k, double Emin_) {
+double inner_integral(int Z, double lf_nuc, double Ee, double k, double logEmin_) {
 	// ==================== INNER INTEGRAL ====================
     // integral 3: over all electron energies (in nucleus rest frame - NRF)
+    double logEmax_ = log10(k - 1);
 
-    if (k - 1.0001 <= Emin_) {
+    if (logEmax_ <= logEmin_) {
     	return 0.0;
     } else {
-        double inner = 0.0;
-        double Emax_ = k - 1;
-        double dE_ = (Emax_ - Emin_) / 50;
-        for (double E_ = Emin_; E_ < Emax_; E_ += dE_) {
+        double E_ = 0, dE_ = 0, inner = 0;
+        double dlogE_ = (logEmax_ - logEmin_) / 20;
+
+        for (double logE_ = logEmin_; logE_ < logEmax_; logE_ += dlogE_) {
+            // pow(x, y) = exp(y * log(x)), log(10) ~ 2.302585092994045684018
+            // (faster than using pow(10, y))
+            E_ = exp(logE_ * 2.302585092994045684018);
+            dE_ = exp((logE_ + dlogE_) * 2.302585092994045684018) - E_;
             // manual midpoint rule 
             inner += dE_ * inner_integrand(E_ + dE_ / 2, Ee, lf_nuc, k, Z);
 
@@ -93,16 +89,16 @@ double inner_integral(int Z, double lf_nuc, double Ee, double k, double Emin_) {
 }
 
 
-double middle_integral(int Z, double lf_nuc, double Ee, double eps, double k_min, double Emin_) {
+double middle_integral(int Z, double lf_nuc, double Ee, double eps, double k_min, double logEmin_) {
     // ==================== MIDDLE INTEGRAL ====================
     // integral 2: over all scattering angles (nucleus - photon); (-> all k)
     double middle = 0.0;
 
     double k_max   = 2 * lf_nuc * eps;
-    double dk = (k_max - k_min) / 20;
+    double dk = (k_max - k_min) / 50;
     for (double k = k_min; k < k_max; k += dk) {
         // midpoint rule
-        middle += inner_integral(Z, lf_nuc, Ee, k + dk / 2, Emin_) * dk * MEC2 * k * MEC2;
+        middle += inner_integral(Z, lf_nuc, Ee, k + dk / 2, logEmin_) * dk * MEC2 * k * MEC2;
 
     }
     return middle;
@@ -112,9 +108,9 @@ double middle_integral(int Z, double lf_nuc, double Ee, double eps, double k_min
 double outer_integral(int Z, double lf_nuc, double Ee, double *eps_arr, double eps_max, double *deps, double *f_pho, int N_eps) {
     // INTEGRATION LOWER LIMITS -----
     // middle
-    double k_min = pow((lf_nuc + Ee), 2) / (2 * lf_nuc * Ee);
+    double k_min = ((lf_nuc + Ee)*(lf_nuc + Ee)) / (2 * lf_nuc * Ee);
     // inner
-    double Emin_ = (lf_nuc*lf_nuc + Ee*Ee) / (2 * lf_nuc * Ee);
+    double logEmin_ = log10((lf_nuc*lf_nuc + Ee*Ee) / (2 * lf_nuc * Ee));
 
     // ==================== OUTER INTEGRAL ====================
     // integral 1: over all eps (LAB frame photon energies)
@@ -124,24 +120,9 @@ double outer_integral(int Z, double lf_nuc, double Ee, double *eps_arr, double e
 
     for (int i = 0; i < N_eps ; i++) {
         if (eps_arr[i] >= eps_min && eps_arr[i] <= eps_max) {
-            double middle = middle_integral(Z, lf_nuc, Ee, eps_arr[i], k_min, Emin_);
+            double middle = middle_integral(Z, lf_nuc, Ee, eps_arr[i], k_min, logEmin_);
             outer += middle * deps[i] / (eps_arr[i]*eps_arr[i]) / MEC2 * f_pho[i];
         }
     }
-    return 1 / (2 * lf_nuc*lf_nuc*lf_nuc) * outer;
+    return outer / (2 * lf_nuc*lf_nuc*lf_nuc);
 }
-
-
-// double *loop_electron_energies(int A, int Z, double lf_nuc, double eps_max, double *eps_arr, double *deps, double *f_pho, double N_eps, double *dNdEe) {
-//     double Ee_min = pow(10, 7.0028719) /  MEC2;
-//     double Ee_max = pow(10, 23.9028719) / MEC2;
-//     double dEe = (Ee_max - Ee_min) / 170;
-
-//     // for (double Ee = Ee_min; Ee < Ee_max; Ee += dEe) {
-//     for (int i = 0; i < 170; i++) {
-//         printf("%i", i);
-//         dNdEe[i] = outer_integral(Z, lf_nuc, Ee_min + i * dEe, eps_arr, eps_max, deps, f_pho, N_eps);
-//     }
-//     return dNdEe;
-
-// }

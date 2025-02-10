@@ -1,5 +1,12 @@
 import numpy as np
 from numba import njit
+import ctypes
+so_file = './kelner.so'
+kelner = ctypes.CDLL(so_file)
+c_double_p = ctypes.POINTER(ctypes.c_double)
+kelner.inner_integral.restype = ctypes.c_double
+kelner.middle_integral.restype = ctypes.c_double
+kelner.outer_integral.restype = ctypes.c_double
 
 # =============================
 # = CONSTANTS (from PDG 2024) =
@@ -104,6 +111,9 @@ def middle_integral(Z, lf_nuc, Ee, eps, k_min, Emin_):
 
     for i, k in enumerate(k_arr):
         inner = inner_integral(Z, lf_nuc, Ee, k, Emin_)  # [m^3 / s / eV]
+
+        # inner = kelner.inner_integral(ctypes.c_int(Z), ctypes.c_double(lf_nuc), ctypes.c_double(Ee), ctypes.c_double(k), ctypes.c_double(Emin_))
+
         # units: inner [m^3 / s / eV] * (dk * k * MEC2^2) [eV^2] -> [m^3 * eV / s]
         middle += inner * (dk[i] * MEC2) * (k * MEC2)
 
@@ -126,6 +136,9 @@ def outer_integral(Z, lf_nuc, Ee, eps_max, eps_arr, deps, f_pho):
 
     for n, eps in enumerate(eps_arr[eps_mask]):
         middle = middle_integral(Z, lf_nuc, Ee, eps, k_min, Emin_)
+
+        # middle = kelner.middle_integral(ctypes.c_int(Z), ctypes.c_double(lf_nuc), ctypes.c_double(Ee), ctypes.c_double(eps), ctypes.c_double(k_min), ctypes.c_double(Emin_))
+
         # units: middle [m^3 * eV / s] * (deps / eps^2 / MEC2) [1 / eV] * f_pho [1 / m^3 / eV] -> [1 / eV / s]
         outer += middle * deps[eps_mask][n] / eps**2 / MEC2 * f_pho[eps_mask][n]
 
@@ -135,9 +148,13 @@ def outer_integral(Z, lf_nuc, Ee, eps_max, eps_arr, deps, f_pho):
 def loop_electron_energies(A, Z, Ee_arr, lf_nuc, eps_max, eps_arr, deps, f_pho):
     dNdEe = np.zeros(len(Ee_arr))  # [1 / eV / s]
 
+    # dNdEe = kelner.loop_electron_energies(ctypes.c_int(A), ctypes.c_int(Z), ctypes.c_double(lf_nuc), ctypes.c_double(eps_max), eps_arr.astype(np.float64).ctypes.data_as(c_double_p), deps.ctypes.data_as(c_double_p), f_pho.ctypes.data_as(c_double_p), ctypes.c_int(len(eps_arr)), dNdEe.ctypes.data_as(c_double_p));
+
     for m, Ee in enumerate(Ee_arr):
-        outer = outer_integral(Z, lf_nuc, Ee, eps_max, eps_arr, deps, f_pho)  # [1 / eV / s]
-        dNdEe[m] = (1 / (2 * lf_nuc**3) * outer)
+        # outer = outer_integral(Z, lf_nuc, Ee, eps_max, eps_arr, deps, f_pho)  # [1 / eV / s]
+        # dNdEe[m] = (1 / (2 * lf_nuc**3) * outer)
+
+        dNdEe[m] = kelner.outer_integral(ctypes.c_int(Z), ctypes.c_double(lf_nuc), ctypes.c_double(Ee), ctypes.c_double(eps_max), eps_arr.astype(np.float64).ctypes.data_as(c_double_p), deps.ctypes.data_as(c_double_p), f_pho.ctypes.data_as(c_double_p), ctypes.c_int(len(eps_arr)))
 
     return dNdEe  # [1 / eV / s]
 
